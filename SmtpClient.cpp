@@ -1,26 +1,64 @@
 #include "SmtpClient.h"
 #include "Client.h"
-#define SMTP_PORT 25
+
+#define SMTP_PORT	25
+#define SMTP_SSL_PORT	465
+
 #define ZERO_IP IPAddress(0, 0, 0, 0)
 #define TIMEOUT 10000
 #define CRLF "\r\n"
 
-SmtpClient::SmtpClient(Client* client, char *server) : _client(client), _server(server), _serverIP(ZERO_IP), _port(SMTP_PORT) {
+SmtpClient::SmtpClient(Client* client, char *server) :
+	_client(client),
+	_server(server),
+	_serverIP(ZERO_IP),
+	_port(SMTP_PORT) {
 }
 
-SmtpClient::SmtpClient(Client* client, char *server, uint16_t port) : _client(client), _server(server), _serverIP(ZERO_IP), _port(port) {
+SmtpClient::SmtpClient(Client* client, char *server, uint16_t port) :
+	_client(client),
+	_server(server),
+	_serverIP(ZERO_IP),
+	_port(port) {
 }
 
-SmtpClient::SmtpClient(Client* client, IPAddress serverIP) : _client(client), _serverIP(serverIP), _server(""), _port(SMTP_PORT) {
+SmtpClient::SmtpClient(Client* client, char *server, bool use_ssl) :
+	_client(client),
+	_server(server),
+	_serverIP(ZERO_IP) {
+  _port = use_ssl ? SMTP_SSL_PORT : SMTP_PORT;
 }
 
-SmtpClient::SmtpClient(Client* client, IPAddress serverIP, uint16_t port) : _client(client), _serverIP(serverIP), _server(""), _port(port) {
+SmtpClient::SmtpClient(Client* client, IPAddress serverIP) :
+	_client(client),
+	_serverIP(serverIP),
+	_server(""),
+	_port(SMTP_PORT) {
 }
 
+SmtpClient::SmtpClient(Client* client, IPAddress serverIP, uint16_t port) :
+	_client(client),
+	_serverIP(serverIP),
+	_server(""),
+	_port(port) {
+}
+
+#define Error(txt) \
+	errorline = __LINE__; \
+	errortext = txt;
+
+int SmtpClient::GetErrorLine() {
+  return errorline;
+}
+
+char *SmtpClient::GetErrorText() {
+  return errortext;
+}
 
 int SmtpClient::send(Mail *mail) {
   int result = connect();
   if (!result) {
+    Error("connect failed");
     _client->stop();
     return 0;
   }
@@ -31,51 +69,68 @@ int SmtpClient::send(Mail *mail) {
 
 int SmtpClient::_send(Mail *mail) {
   if (readStatus() != 220) {
+    Error("ReadStatus != 220");
     return 0;
   }
   if (helo() != 250) {
+    Error("HELO != 250");
     return 0;
   }
   if (mailFrom(mail->_from) != 250) {
+    Error("MailFrom != 250");
     return 0;
   }
   if (rcptTo(mail) != 250) {
+    Error("RcptTo != 250");
     return 0;
   }
   if (data() != 354) {
+    Error("Data != 354");
     return 0;
   }
   headers(mail);
   body(mail->_body);
   if (finishBody() != 250) {
+    Error("FinishBody != 250");
     return 0;
   }
   return 1;
 }
 
+#include <ESP8266WiFi.h>
 int SmtpClient::connect() {
   if (strlen(_server) > 0) {
+    Serial.printf("Connect %s %d\n", _server, _port);
     return _client->connect(_server, _port);
   } else {
-    return _client->connect(_serverIP, _port);
+    Serial.print("Local IP ");
+    Serial.print(WiFi.localIP());
+    Serial.print(", subnet mask ");
+    Serial.print(WiFi.subnetMask());
+    Serial.print(", connect to IP ");
+    Serial.print(_serverIP);
+    Serial.printf(", %d\n",_port);
+    int r = _client->connect(_serverIP, _port);
+    Serial.printf("connect -> %d\n", r);
+    return r;
   }
 }
 
 int SmtpClient::helo() {
-  _client->print("EHLO");
+  _client->print("EHLO 192.168.1.100");
   _client->print(CRLF);
   int status = readStatus();
   if (status == 250) {
     return status;
   }
   // IF server doesn't understand EHLO, try HELO
-  _client->print("HELO");
+  _client->print("HELO 192.168.1.100");
   _client->print(CRLF);
   return readStatus();
 }
 
 int SmtpClient::mailFrom(char *from) {
-  _client->print("MAIL FROM:");
+  _client->print("MAIL FROM: ");
   _client->print(from);
   _client->print(CRLF);
   return readStatus();
@@ -84,7 +139,7 @@ int SmtpClient::mailFrom(char *from) {
 int SmtpClient::rcptTo(Mail *mail) {
   int status;
   for (uint8_t i = 0; i < mail->_recipientCount; i++) {
-    _client->print("RCPT TO:");
+    _client->print("RCPT TO: ");
     _client->print(mail->_recipients[i]);
     _client->print(CRLF);
 
@@ -168,7 +223,7 @@ int SmtpClient::finishBody() {
 }
 
 int SmtpClient::readStatus() {
-  char line[4];
+  char line[5];
   int result;
   while(true) {
     result = readLine(line, 4);
@@ -179,6 +234,7 @@ int SmtpClient::readStatus() {
     break;
   }
 
+  Serial.printf("ReadStatus {%s}\n", line);
   if (result < 3) {
     return 0;
   }
